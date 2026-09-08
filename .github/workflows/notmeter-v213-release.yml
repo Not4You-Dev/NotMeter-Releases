@@ -1,0 +1,95 @@
+name: NotMeter v1.0.213 one-time release
+
+on:
+  push:
+    branches:
+      - codex-release-v213-20260908
+    paths:
+      - .github/workflows/notmeter-v213-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reassemble and verify package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat release-payload/NotMeter.zip.part.* > NotMeter-v213-stage.zip
+          unzip -p NotMeter-v213-stage.zip NotMeter.exe > NotMeter-v213-stage.exe
+          test "$(stat -c '%s' NotMeter-v213-stage.exe)" = "144172297"
+          test "$(stat -c '%s' NotMeter-v213-stage.zip)" = "138010478"
+          echo "e45861e7a10468ed195227ed5843ff3ee16df2b3ca0c82d95f5176863e511d01  NotMeter-v213-stage.exe" | sha256sum -c -
+          echo "8195b398a1601d89f8f9750c1ed8f4e75d87642701cc7f0625ffe6aebd7858f5  NotMeter-v213-stage.zip" | sha256sum -c -
+
+      - name: Replace v212 files and change only the version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+          release_id="$(gh api "repos/${repo}/releases/tags/v1.0.212" --jq '.id')"
+
+          test "$(gh api "repos/${repo}/releases/${release_id}" --jq '.tag_name')" = "v1.0.212"
+          test "$(gh api "repos/${repo}/releases/${release_id}" --jq '.name')" = "NotMeter v1.0.212"
+          test -z "$(gh api "repos/${repo}/releases/${release_id}" --jq '.body // ""')"
+          test "$(gh api "repos/${repo}/releases/${release_id}/assets" --jq '[.[] | select(.name == "NotMeter.exe" and .size == 144145769)] | length')" = "1"
+          test "$(gh api "repos/${repo}/releases/${release_id}/assets" --jq '[.[] | select(.name == "NotMeter.zip" and .size == 137980922)] | length')" = "1"
+
+          for stage_name in NotMeter-v213-stage.exe NotMeter-v213-stage.zip; do
+            stage_id="$(gh api "repos/${repo}/releases/${release_id}/assets" --jq ".[] | select(.name == \"${stage_name}\") | .id")"
+            if [[ -n "${stage_id}" ]]; then
+              gh api -X DELETE "repos/${repo}/releases/assets/${stage_id}"
+            fi
+          done
+
+          gh release upload v1.0.212 NotMeter-v213-stage.exe NotMeter-v213-stage.zip
+
+          exe_stage="$(gh api "repos/${repo}/releases/${release_id}/assets" --jq '.[] | select(.name == "NotMeter-v213-stage.exe") | [.id, .size, (.digest // "")] | @tsv')"
+          zip_stage="$(gh api "repos/${repo}/releases/${release_id}/assets" --jq '.[] | select(.name == "NotMeter-v213-stage.zip") | [.id, .size, (.digest // "")] | @tsv')"
+          IFS=$'\t' read -r exe_stage_id exe_size exe_digest <<< "${exe_stage}"
+          IFS=$'\t' read -r zip_stage_id zip_size zip_digest <<< "${zip_stage}"
+          test -n "${exe_stage_id}"
+          test -n "${zip_stage_id}"
+          test "${exe_size}" = "144172297"
+          test "${zip_size}" = "138010478"
+          if [[ -n "${exe_digest}" ]]; then
+            test "${exe_digest}" = "sha256:e45861e7a10468ed195227ed5843ff3ee16df2b3ca0c82d95f5176863e511d01"
+          fi
+          if [[ -n "${zip_digest}" ]]; then
+            test "${zip_digest}" = "sha256:8195b398a1601d89f8f9750c1ed8f4e75d87642701cc7f0625ffe6aebd7858f5"
+          fi
+
+          for final_name in NotMeter.exe NotMeter.zip; do
+            old_id="$(gh api "repos/${repo}/releases/${release_id}/assets" --jq ".[] | select(.name == \"${final_name}\") | .id")"
+            test -n "${old_id}"
+            gh api -X DELETE "repos/${repo}/releases/assets/${old_id}"
+          done
+
+          gh api -X PATCH "repos/${repo}/releases/assets/${exe_stage_id}" -f name='NotMeter.exe' >/dev/null
+          gh api -X PATCH "repos/${repo}/releases/assets/${zip_stage_id}" -f name='NotMeter.zip' >/dev/null
+          gh api -X PATCH "repos/${repo}/releases/${release_id}" -f tag_name='v1.0.213' -f name='NotMeter v1.0.213' >/dev/null
+
+          test "$(gh api "repos/${repo}/releases/${release_id}" --jq '.tag_name')" = "v1.0.213"
+          test "$(gh api "repos/${repo}/releases/${release_id}" --jq '.name')" = "NotMeter v1.0.213"
+          test -z "$(gh api "repos/${repo}/releases/${release_id}" --jq '.body // ""')"
+          test "$(gh api "repos/${repo}/releases/${release_id}/assets" --jq '[.[] | select(.name == "NotMeter.exe" and .size == 144172297 and ((.digest // "") == "" or .digest == "sha256:e45861e7a10468ed195227ed5843ff3ee16df2b3ca0c82d95f5176863e511d01"))] | length')" = "1"
+          test "$(gh api "repos/${repo}/releases/${release_id}/assets" --jq '[.[] | select(.name == "NotMeter.zip" and .size == 138010478 and ((.digest // "") == "" or .digest == "sha256:8195b398a1601d89f8f9750c1ed8f4e75d87642701cc7f0625ffe6aebd7858f5"))] | length')" = "1"
+          test "$(gh api "repos/${repo}/releases/${release_id}/assets" --jq '[.[] | select(.name == "NotMeter.exe" or .name == "NotMeter.zip")] | length')" = "2"
+
+      - name: Mark verified release
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'v1.0.213 verified' > release-payload/v213-verified.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add release-payload/v213-verified.txt
+          git commit -m '213 릴리스 검증 완료'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
